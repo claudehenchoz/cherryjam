@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=CherryJam
+GenericName=VST Instrument Player
+Comment=Load a VST3 instrument and play it with your computer keyboard
+Exec=cherryjam %f
+Icon=cherryjam
+Terminal=false
+Categories=AudioVideo;Audio;Music;
+Keywords=vst;vst3;synth;synthesizer;instrument;piano;
+StartupWMClass=cherryjam

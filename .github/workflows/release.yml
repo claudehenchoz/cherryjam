@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            os: windows-latest
+          - name: linux-x86_64
+            # Oldest supported runner: the binary then runs on older glibc versions too.
+            os: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libxkbcommon-dev libgl1-mesa-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "cherryjam-${{ github.ref_name }}-${{ matrix.name }}"
+          New-Item -ItemType Directory -Path $name | Out-Null
+          Copy-Item target/release/cherryjam.exe, README.md $name
+          Copy-Item -Recurse icons $name/icons
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+          "ASSET=$name.zip" >> $env:GITHUB_ENV
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          name="cherryjam-${{ github.ref_name }}-${{ matrix.name }}"
+          mkdir -p "$name/icons"
+          cp target/release/cherryjam README.md packaging/cherryjam.desktop packaging/install.sh "$name/"
+          chmod +x "$name/cherryjam" "$name/install.sh"
+          cp -r icons/linux/hicolor "$name/icons/"
+          tar -czf "$name.tar.gz" "$name"
+          echo "ASSET=$name.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          # Tags like v1.0.0-beta.1 are marked as pre-releases.
+          prerelease: ${{ contains(github.ref_name, '-') }}
