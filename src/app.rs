@@ -108,6 +108,8 @@ impl App {
         crate::keyboard::hook::install(keyboard.clone(), cc.egui_ctx.clone());
 
         let parent = parent_handle(cc);
+        #[cfg(target_os = "linux")]
+        crate::keyboard::x11::start(keyboard.clone(), cc.egui_ctx.clone(), parent);
         let entries = config.scan();
 
         let from_arg = open.and_then(|path| {
@@ -446,11 +448,24 @@ impl App {
                 )
             })
         });
+        let typing = ctx.egui_wants_keyboard_input();
+        // With the X11 poller running, it is the only source of key presses (F11 included).
+        #[cfg(target_os = "linux")]
+        let polled = {
+            crate::keyboard::x11::TEXT_INPUT.store(typing, Ordering::Relaxed);
+            crate::keyboard::x11::ACTIVE.load(Ordering::Relaxed)
+        };
+        #[cfg(not(target_os = "linux"))]
+        let polled = false;
+
         let hooked = crate::keyboard::FULLSCREEN_REQUESTED.swap(false, Ordering::Relaxed);
-        if f11 || hooked {
+        if (f11 && !polled) || hooked {
             toggle_fullscreen(ctx);
         }
-        let typing = ctx.egui_wants_keyboard_input();
+        if polled {
+            // The poller releases everything by itself when focus leaves our windows.
+            return;
+        }
         let focused = ctx.input(|i| i.focused);
         if self.window_focused && !focused && !editor::is_child_focused() {
             // Key-ups would get lost while another app has focus.

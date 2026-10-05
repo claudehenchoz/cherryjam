@@ -63,12 +63,19 @@ unsafe fn load_uncached(binary: &Path) -> Result<Module, String> {
         if let Ok(init) = lib.get::<unsafe extern "system" fn() -> bool>(b"InitDll\0") {
             init();
         }
+        // ModuleEntry gets the dlopen handle; JUCE plugins use it to locate their own files.
         #[cfg(target_os = "linux")]
-        if let Ok(entry) = lib.get::<unsafe extern "C" fn(*mut c_void) -> bool>(b"ModuleEntry\0") {
-            if !entry(std::ptr::null_mut()) {
+        let lib = {
+            let handle = libloading::os::unix::Library::from(lib).into_raw();
+            let lib: libloading::Library = libloading::os::unix::Library::from_raw(handle).into();
+            if let Ok(entry) =
+                lib.get::<unsafe extern "C" fn(*mut c_void) -> bool>(b"ModuleEntry\0")
+                && !entry(handle)
+            {
                 return Err("ModuleEntry failed".into());
             }
-        }
+            lib
+        };
 
         let get: libloading::Symbol<GetFactory> = lib
             .get(b"GetPluginFactory\0")

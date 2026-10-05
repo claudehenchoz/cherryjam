@@ -57,10 +57,32 @@ pub const KEYMAP: &[(Key, u8)] = &[
     (Key::CloseBracket, 31),
 ];
 
-/// Set by the Windows keyboard hook when F11 is pressed while the plugin editor has focus; the
-/// app toggles fullscreen on its next frame.
+/// Set when F11 is seen outside egui (Windows keyboard hook, Linux X11 poller); the app toggles
+/// fullscreen on its next frame.
 pub static FULLSCREEN_REQUESTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+
+/// PC/AT scan code set 1 ↔ physical key (named after the US layout, like egui does). For these
+/// keys the Linux evdev key codes are the same numbers.
+#[rustfmt::skip]
+pub(crate) const SCANCODES: &[(u32, Key)] = {
+    use Key::*;
+    &[
+        (0x02, Num1), (0x03, Num2), (0x04, Num3), (0x05, Num4), (0x06, Num5),
+        (0x07, Num6), (0x08, Num7), (0x09, Num8), (0x0A, Num9), (0x0B, Num0),
+        (0x0C, Minus), (0x0D, Equals),
+        (0x10, Q), (0x11, W), (0x12, E), (0x13, R), (0x14, T), (0x15, Y), (0x16, U),
+        (0x17, I), (0x18, O), (0x19, P), (0x1A, OpenBracket), (0x1B, CloseBracket),
+        (0x1E, A), (0x1F, S), (0x20, D), (0x21, F), (0x22, G), (0x23, H), (0x24, J),
+        (0x25, K), (0x26, L), (0x27, Semicolon),
+        (0x2C, Z), (0x2D, X), (0x2E, C), (0x2F, V), (0x30, B), (0x31, N), (0x32, M),
+        (0x33, Comma), (0x34, Period), (0x35, Slash),
+    ]
+};
+
+pub(crate) fn key_to_scancode(key: Key) -> Option<u32> {
+    SCANCODES.iter().find(|(_, k)| *k == key).map(|(s, _)| *s)
+}
 
 pub fn offset_for(key: Key) -> Option<u8> {
     KEYMAP.iter().find(|(k, _)| *k == key).map(|(_, o)| *o)
@@ -113,7 +135,7 @@ fn layout_label(key: Key) -> Option<String> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         MAPVK_VK_TO_CHAR, MAPVK_VSC_TO_VK, MapVirtualKeyW,
     };
-    let sc = hook::key_to_scancode(key)?;
+    let sc = key_to_scancode(key)?;
     unsafe {
         let vk = MapVirtualKeyW(sc, MAPVK_VSC_TO_VK);
         // The high bit marks dead keys; the low word is the unshifted character.
@@ -123,7 +145,32 @@ fn layout_label(key: Key) -> Option<String> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn layout_label(key: Key) -> Option<String> {
+    use x11rb::protocol::xproto::ConnectionExt;
+    let code = key_to_scancode(key)? + x11::KEYCODE_OFFSET;
+    let (conn, _) = x11rb::connect(None).ok()?;
+    let map = conn
+        .get_keyboard_mapping(code as u8, 1)
+        .ok()?
+        .reply()
+        .ok()?;
+    let sym = *map.keysyms.first()?;
+    let c = match sym {
+        0x20..=0x7e | 0xa0..=0xff => char::from_u32(sym)?,
+        0x0100_0000..=0x0110_ffff => char::from_u32(sym - 0x0100_0000)?,
+        // Dead keys, common on European layouts.
+        0xfe50 => '`',
+        0xfe51 => '´',
+        0xfe52 => '^',
+        0xfe53 => '~',
+        0xfe57 => '¨',
+        _ => return None,
+    };
+    (!c.is_control() && c != ' ').then(|| c.to_uppercase().collect())
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn layout_label(_key: Key) -> Option<String> {
     None
 }
@@ -334,23 +381,6 @@ pub mod hook {
         unsafe { CallNextHookEx(std::ptr::null_mut(), code, w, l) }
     }
 
-    /// PC/AT scan code set 1 ↔ physical key (named after the US layout, like egui does).
-    #[rustfmt::skip]
-    const SCANCODES: &[(u32, Key)] = {
-        use Key::*;
-        &[
-            (0x02, Num1), (0x03, Num2), (0x04, Num3), (0x05, Num4), (0x06, Num5),
-            (0x07, Num6), (0x08, Num7), (0x09, Num8), (0x0A, Num9), (0x0B, Num0),
-            (0x0C, Minus), (0x0D, Equals),
-            (0x10, Q), (0x11, W), (0x12, E), (0x13, R), (0x14, T), (0x15, Y), (0x16, U),
-            (0x17, I), (0x18, O), (0x19, P), (0x1A, OpenBracket), (0x1B, CloseBracket),
-            (0x1E, A), (0x1F, S), (0x20, D), (0x21, F), (0x22, G), (0x23, H), (0x24, J),
-            (0x25, K), (0x26, L), (0x27, Semicolon),
-            (0x2C, Z), (0x2D, X), (0x2E, C), (0x2F, V), (0x30, B), (0x31, N), (0x32, M),
-            (0x33, Comma), (0x34, Period), (0x35, Slash),
-        ]
-    };
-
     fn scancode_to_key(sc: u32, extended: bool) -> Option<Key> {
         if extended {
             return match sc {
@@ -361,10 +391,146 @@ pub mod hook {
                 _ => None,
             };
         }
-        SCANCODES.iter().find(|(s, _)| *s == sc).map(|(_, k)| *k)
+        super::SCANCODES
+            .iter()
+            .find(|(s, _)| *s == sc)
+            .map(|(_, k)| *k)
+    }
+}
+
+/// On Linux, keys are read straight from the X server instead of from window events.
+///
+/// Plugin editors are separate X11 windows that can take keyboard focus at any moment (some
+/// plugins grab it as soon as they open). A background thread polls the physical key state every
+/// couple of milliseconds while any CherryJam window (including the embedded editor) has focus,
+/// so notes play no matter which of our windows holds focus.
+#[cfg(target_os = "linux")]
+pub mod x11 {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    use egui::Key;
+    use parking_lot::Mutex;
+    use x11rb::protocol::xproto::{ConnectionExt, Window};
+    use x11rb::rust_connection::RustConnection;
+
+    use super::{FULLSCREEN_REQUESTED, KeyboardState, SCANCODES};
+
+    /// X11 keycodes are the evdev codes shifted by 8.
+    pub const KEYCODE_OFFSET: u32 = 8;
+    const F11: u32 = 87;
+    const POLL: Duration = Duration::from_millis(2);
+
+    /// The poller is running; window key events must not also play notes.
+    pub static ACTIVE: AtomicBool = AtomicBool::new(false);
+    /// A text field has keyboard focus: keys type instead of playing.
+    pub static TEXT_INPUT: AtomicBool = AtomicBool::new(false);
+
+    fn key_for(evdev: u32) -> Option<Key> {
+        match evdev {
+            105 => Some(Key::ArrowLeft),
+            106 => Some(Key::ArrowRight),
+            104 => Some(Key::PageUp),
+            109 => Some(Key::PageDown),
+            _ => SCANCODES.iter().find(|(s, _)| *s == evdev).map(|(_, k)| *k),
+        }
     }
 
-    pub fn key_to_scancode(key: Key) -> Option<u32> {
-        SCANCODES.iter().find(|(_, k)| *k == key).map(|(s, _)| *s)
+    pub fn start(keyboard: Arc<Mutex<KeyboardState>>, ctx: egui::Context, main_window: usize) {
+        if main_window == 0 || ACTIVE.load(Ordering::Relaxed) {
+            return;
+        }
+        let Ok((conn, _)) = x11rb::connect(None) else {
+            return;
+        };
+        ACTIVE.store(true, Ordering::Relaxed);
+        let spawned = std::thread::Builder::new()
+            .name("cherryjam-keys".into())
+            .spawn(move || run(&conn, &keyboard, &ctx, main_window as Window));
+        if spawned.is_err() {
+            ACTIVE.store(false, Ordering::Relaxed);
+        }
+    }
+
+    /// True if `w` is `main` or one of its descendants (e.g. an embedded plugin editor).
+    pub fn is_inside(conn: &RustConnection, mut w: Window, main: Window) -> bool {
+        for _ in 0..64 {
+            if w == main {
+                return true;
+            }
+            // 0 = None, 1 = PointerRoot.
+            if w <= 1 {
+                return false;
+            }
+            let Some(tree) = conn.query_tree(w).ok().and_then(|c| c.reply().ok()) else {
+                return false;
+            };
+            if tree.parent == 0 || tree.parent == tree.root {
+                return false;
+            }
+            w = tree.parent;
+        }
+        false
+    }
+
+    fn run(
+        conn: &RustConnection,
+        keyboard: &Mutex<KeyboardState>,
+        ctx: &egui::Context,
+        main: Window,
+    ) {
+        let mut prev = [0u8; 32];
+        let mut last_focus = Window::MAX;
+        let mut ours = false;
+        loop {
+            std::thread::sleep(POLL);
+            let Some(focus) = conn.get_input_focus().ok().and_then(|c| c.reply().ok()) else {
+                continue;
+            };
+            if focus.focus != last_focus {
+                last_focus = focus.focus;
+                ours = is_inside(conn, focus.focus, main);
+            }
+            // Outside our windows (or while typing) everything counts as released, so notes never
+            // hang when focus moves away mid-chord.
+            let keys = if ours && !TEXT_INPUT.load(Ordering::Relaxed) {
+                match conn.query_keymap().ok().and_then(|c| c.reply().ok()) {
+                    Some(r) => r.keys,
+                    None => continue,
+                }
+            } else {
+                [0u8; 32]
+            };
+            if keys == prev {
+                continue;
+            }
+            let mut changed = false;
+            {
+                let mut kb = keyboard.lock();
+                for (byte, (&now, &before)) in keys.iter().zip(prev.iter()).enumerate() {
+                    let diff = now ^ before;
+                    for bit in (0..8).filter(|b| diff & (1 << b) != 0) {
+                        let code = (byte * 8 + bit) as u32;
+                        let pressed = now & (1 << bit) != 0;
+                        let Some(evdev) = code.checked_sub(KEYCODE_OFFSET) else {
+                            continue;
+                        };
+                        if evdev == F11 {
+                            if pressed {
+                                FULLSCREEN_REQUESTED.store(true, Ordering::Relaxed);
+                                changed = true;
+                            }
+                        } else if let Some(key) = key_for(evdev) {
+                            changed |= kb.key_event(key, pressed, false);
+                        }
+                    }
+                }
+            }
+            prev = keys;
+            if changed {
+                ctx.request_repaint();
+            }
+        }
     }
 }

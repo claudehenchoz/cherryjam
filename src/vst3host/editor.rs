@@ -333,9 +333,11 @@ mod platform {
 #[cfg(target_os = "linux")]
 mod platform {
     use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use x11rb::CURRENT_TIME;
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{
-        ConfigureWindowAux, ConnectionExt, CreateWindowAux, WindowClass,
+        ConfigureWindowAux, ConnectionExt, CreateWindowAux, InputFocus, WindowClass,
     };
     use x11rb::rust_connection::RustConnection;
 
@@ -348,8 +350,12 @@ mod platform {
             .as_ref()
     }
 
+    /// The main window, for focus handling.
+    static PARENT: AtomicUsize = AtomicUsize::new(0);
+
     pub fn create_child(parent: usize) -> Option<usize> {
         let c = conn()?;
+        PARENT.store(parent, Ordering::Relaxed);
         let id = c.generate_id().ok()?;
         c.create_window(
             x11rb::COPY_DEPTH_FROM_PARENT,
@@ -410,9 +416,24 @@ mod platform {
         }
     }
 
+    /// True if keyboard focus is inside the plugin editor (not on the main window).
     pub fn is_child_focused() -> bool {
-        false
+        let parent = PARENT.load(Ordering::Relaxed) as u32;
+        let Some(c) = conn() else { return false };
+        if parent == 0 {
+            return false;
+        }
+        let Some(focus) = c.get_input_focus().ok().and_then(|r| r.reply().ok()) else {
+            return false;
+        };
+        focus.focus != parent && crate::keyboard::x11::is_inside(c, focus.focus, parent)
     }
 
-    pub fn focus_parent() {}
+    pub fn focus_parent() {
+        let parent = PARENT.load(Ordering::Relaxed) as u32;
+        if let (Some(c), true) = (conn(), parent != 0) {
+            let _ = c.set_input_focus(InputFocus::PARENT, parent, CURRENT_TIME);
+            let _ = c.flush();
+        }
+    }
 }
