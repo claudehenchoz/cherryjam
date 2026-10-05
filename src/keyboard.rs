@@ -57,6 +57,11 @@ pub const KEYMAP: &[(Key, u8)] = &[
     (Key::CloseBracket, 31),
 ];
 
+/// Set by the Windows keyboard hook when F11 is pressed while the plugin editor has focus; the
+/// app toggles fullscreen on its next frame.
+pub static FULLSCREEN_REQUESTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub fn offset_for(key: Key) -> Option<u8> {
     KEYMAP.iter().find(|(k, _)| *k == key).map(|(_, o)| *o)
 }
@@ -306,6 +311,16 @@ pub mod hook {
             let extended = (l >> 24) & 1 == 1;
             let was_down = (l >> 30) & 1 == 1;
             let released = (l >> 31) & 1 == 1;
+            const F11: u32 = 0x57;
+            if scancode == F11 && !extended {
+                if !released && !was_down {
+                    super::FULLSCREEN_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+                    if let Some(t) = TARGET.get() {
+                        t.ctx.request_repaint();
+                    }
+                }
+                return 1;
+            }
             if let Some(key) = scancode_to_key(scancode, extended)
                 && let Some(t) = TARGET.get()
                 && t.keyboard

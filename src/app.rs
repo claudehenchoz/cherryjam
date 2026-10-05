@@ -432,6 +432,24 @@ impl App {
         if ctx.input(|i| i.pointer.any_pressed()) && editor::is_child_focused() {
             editor::focus_parent();
         }
+        // F11 toggles fullscreen, even while typing in a text field.
+        let f11 = ctx.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::Key {
+                        key: egui::Key::F11,
+                        pressed: true,
+                        repeat: false,
+                        ..
+                    }
+                )
+            })
+        });
+        let hooked = crate::keyboard::FULLSCREEN_REQUESTED.swap(false, Ordering::Relaxed);
+        if f11 || hooked {
+            toggle_fullscreen(ctx);
+        }
         let typing = ctx.egui_wants_keyboard_input();
         let focused = ctx.input(|i| i.focused);
         if self.window_focused && !focused && !editor::is_child_focused() {
@@ -494,6 +512,15 @@ impl App {
                     };
                     if ui.button(label).clicked() {
                         self.show_panel = !self.show_panel;
+                    }
+                    let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
+                    let tip = if fullscreen {
+                        "Exit fullscreen (F11)"
+                    } else {
+                        "Fullscreen (F11)"
+                    };
+                    if ui.button("⛶").on_hover_text(tip).clicked() {
+                        toggle_fullscreen(ui.ctx());
                     }
                     ui.separator();
                     let (text, col) = if self.xy.engaged {
@@ -1177,6 +1204,11 @@ mod capture {
             })
         })
     }
+}
+
+fn toggle_fullscreen(ctx: &egui::Context) {
+    let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
 }
 
 fn load_icon(ctx: &egui::Context, name: &str, png: &[u8]) -> egui::TextureHandle {

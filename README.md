@@ -38,6 +38,8 @@ Plenty of apps can host a VST. Some cost a small fortune; the free ones usually 
 
 The plugin's own interface fills the top of the window. Resizable editors stretch to fill the space, editors that support it are scaled to fit, and if a plugin's minimum size is bigger than the window, CherryJam grows the window to fit it. You tweak knobs directly on the instrument, just like on the real hardware.
 
+Hit **F11** (or the ⛶ button in the top bar) for **fullscreen**: no taskbar, no distractions, just you and the synth. F11 again brings the window back. It works even after you've clicked into the plugin.
+
 ### Your keyboard is a keybed
 
 Two full octaves (plus a few extra notes on top), laid out the way a piano player would expect:
@@ -93,6 +95,14 @@ Add more folders under *Settings*. Plugins known to be effects (from their modul
 ---
 
 ## 🚀 Getting started
+
+### Download
+
+Grab the latest build from the [Releases](../../releases) page:
+
+* **Windows installer:** `cherryjam-…-windows-x86_64-setup.exe` installs CherryJam with a Start menu entry (and an optional desktop shortcut). Uninstall from *Apps & features*; your presets and settings are kept.
+* **Windows portable:** `cherryjam-…-windows-x86_64-portable.zip`. Unzip anywhere and run `cherryjam.exe`. Nothing to install.
+* **Linux:** `cherryjam-…-linux-x86_64.tar.gz`. Unpack and run `./cherryjam`, or run `./install.sh` to add it to your app menu (installs for your user only, no root needed).
 
 ### Build
 

@@ -48,33 +48,44 @@ jobs:
       - name: Build
         run: cargo build --release --locked
 
-      - name: Package (Windows)
+      - name: Package portable zip (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $name = "cherryjam-${{ github.ref_name }}-${{ matrix.name }}"
-          New-Item -ItemType Directory -Path $name | Out-Null
+          $name = "cherryjam-${{ github.ref_name }}-${{ matrix.name }}-portable"
+          New-Item -ItemType Directory -Path $name, dist -Force | Out-Null
           Copy-Item target/release/cherryjam.exe, README.md $name
           Copy-Item -Recurse icons $name/icons
-          Compress-Archive -Path $name -DestinationPath "$name.zip"
-          "ASSET=$name.zip" >> $env:GITHUB_ENV
+          Compress-Archive -Path $name -DestinationPath "dist/$name.zip"
+
+      - name: Package installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $makensis = Join-Path ${env:ProgramFiles(x86)} "NSIS/makensis.exe"
+          if (-not (Test-Path $makensis)) {
+            choco install nsis -y --no-progress
+          }
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          $out = Join-Path $PWD "dist/cherryjam-${{ github.ref_name }}-${{ matrix.name }}-setup.exe"
+          & $makensis /V2 "/DVERSION=$version" "/DOUTFILE=$out" packaging/windows/cherryjam.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
           name="cherryjam-${{ github.ref_name }}-${{ matrix.name }}"
-          mkdir -p "$name/icons"
+          mkdir -p "$name/icons" dist
           cp target/release/cherryjam README.md packaging/cherryjam.desktop packaging/install.sh "$name/"
           chmod +x "$name/cherryjam" "$name/install.sh"
           cp -r icons/linux/hicolor "$name/icons/"
-          tar -czf "$name.tar.gz" "$name"
-          echo "ASSET=$name.tar.gz" >> "$GITHUB_ENV"
+          tar -czf "dist/$name.tar.gz" "$name"
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: ${{ env.ASSET }}
+          path: dist/*
           if-no-files-found: error
 
   release:
