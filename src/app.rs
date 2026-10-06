@@ -82,6 +82,9 @@ pub struct App {
     new_folder: String,
     status: String,
     window_focused: bool,
+    /// eframe's GL context, restored before every paint (plugins may switch contexts).
+    gl_guard: Option<crate::gl_guard::GlGuard>,
+    gl_restore_logged: bool,
     /// App icon: simplified artwork for the top bar, full artwork for the welcome screen.
     logo_small: egui::TextureHandle,
     logo_large: egui::TextureHandle,
@@ -167,6 +170,8 @@ impl App {
             new_folder: String::new(),
             status: String::new(),
             window_focused: true,
+            gl_guard: crate::gl_guard::GlGuard::capture(),
+            gl_restore_logged: false,
             logo_small: load_icon(
                 &cc.egui_ctx,
                 "logo-small",
@@ -1291,6 +1296,13 @@ impl eframe::App for App {
             40
         };
         ctx.request_repaint_after(std::time::Duration::from_millis(ms));
+
+        // Plugin editors render with their own GL contexts on this thread; egui paints right
+        // after this returns, so our context must be the current one again.
+        if self.gl_guard.as_ref().is_some_and(|g| g.restore()) && !self.gl_restore_logged {
+            self.gl_restore_logged = true;
+            eprintln!("cherryjam: a plugin switched the OpenGL context; switching back each frame");
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

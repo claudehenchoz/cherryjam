@@ -5,6 +5,7 @@ mod audio;
 mod config;
 mod controller;
 mod fx;
+mod gl_guard;
 mod keyboard;
 mod piano;
 mod preset;

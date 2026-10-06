@@ -59,6 +59,7 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`. It builds on windows-la
   - Oversized editors make the app grow its window once (`Editor::overflow`).
   - Scaling uses `checkSizeConstraint` + `onSize` for resizable editors, or `IPlugViewContentScaleSupport`.
   - On Windows the parent gets `WS_CLIPCHILDREN`. Use the glow renderer, not wgpu, because DXGI flip-model swapchains overdraw child windows.
+  - Plugin editors often render with their own OpenGL context on our UI thread and leave it current. eframe doesn't notice, and the whole egui UI goes black. `gl_guard.rs` captures eframe's context (WGL; GLX or EGL on Linux) in `App::new` and restores it at the end of every `App::ui`, right before eframe paints.
 
 **Keyboard input (`keyboard.rs`)** is matched by *physical* key position (`KEYMAP`: offsets from `base_note`). The piano labels show the user's actual layout (from the Win32 keyboard layout, or the X11 keysyms on Linux). `KeyboardState` refcounts notes so the mouse and keys don't cut each other off. Key events reach it on three paths, depending on platform and focus:
 - **Windows, egui focused:** egui `Event::Key` in `App::handle_keys`.
