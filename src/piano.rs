@@ -57,7 +57,8 @@ fn layout(rect: Rect) -> Vec<KeyGeom> {
 }
 
 impl Piano {
-    pub fn ui(&mut self, ui: &mut Ui, kb: &mut KeyboardState, height: f32) {
+    /// With `arp` on, held keys are drawn dimmed and the notes the arpeggiator is sounding bright.
+    pub fn ui(&mut self, ui: &mut Ui, kb: &mut KeyboardState, height: f32, arp: bool) {
         let (rect, resp) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), height),
             Sense::click_and_drag(),
@@ -90,8 +91,11 @@ impl Piano {
         for black in [false, true] {
             for k in keys.iter().filter(|k| k.black == black) {
                 let note = base.saturating_add(k.offset);
-                let on = kb.is_note_on(note);
+                let held = kb.is_note_on(note);
+                let sounding = crate::arp::arp_note_on(note);
+                let on = held || sounding;
                 let fill = match (black, on) {
+                    (_, true) if arp && !sounding => theme::ACCENT_DIM,
                     (_, true) => theme::ACCENT,
                     (false, false) => {
                         if dark {

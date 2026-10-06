@@ -2,7 +2,7 @@
 
 use super::DelaySettings;
 
-const MAX_SECONDS: f32 = 2.0;
+pub const MAX_SECONDS: f32 = 2.0;
 
 pub struct Delay {
     sr: f32,

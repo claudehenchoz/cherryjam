@@ -16,7 +16,6 @@ use vst3::{ComPtr, ComWrapper};
 use super::host_iface::{EventList, ParamChanges};
 
 pub const MAX_BLOCK: usize = 512;
-const TEMPO: f64 = 120.0;
 
 struct Bus {
     channels: Vec<Vec<f32>>,
@@ -43,6 +42,9 @@ pub struct Processor {
     out_bufs: Vec<AudioBusBuffers>,
     sample_rate: f64,
     sample_pos: i64,
+    /// Host tempo reported to the plugin, and the musical position (in quarter notes).
+    tempo: f64,
+    music_pos: f64,
 }
 
 // The processor is moved to the audio thread once and only used there afterwards.
@@ -76,11 +78,19 @@ impl Processor {
             outputs,
             sample_rate,
             sample_pos: 0,
+            tempo: crate::tempo::DEFAULT_BPM as f64,
+            music_pos: 0.0,
         }
     }
 
-    pub fn note_on(&mut self, pitch: u8, velocity: f32) {
+    pub fn set_tempo(&mut self, bpm: f32) {
+        self.tempo = bpm as f64;
+    }
+
+    /// Queues a note-on at `offset` samples into the next `process` call.
+    pub fn note_on_at(&mut self, offset: u32, pitch: u8, velocity: f32) {
         let mut e: Event = unsafe { std::mem::zeroed() };
+        e.sampleOffset = offset as i32;
         e.r#type = kNoteOnEvent as u16;
         e.__field0.noteOn = NoteOnEvent {
             channel: 0,
@@ -93,8 +103,9 @@ impl Processor {
         self.push_event(e);
     }
 
-    pub fn note_off(&mut self, pitch: u8) {
+    pub fn note_off_at(&mut self, offset: u32, pitch: u8) {
         let mut e: Event = unsafe { std::mem::zeroed() };
+        e.sampleOffset = offset as i32;
         e.r#type = kNoteOffEvent as u16;
         e.__field0.noteOff = NoteOffEvent {
             channel: 0,
@@ -142,8 +153,9 @@ impl Processor {
         ctx.sampleRate = self.sample_rate;
         ctx.projectTimeSamples = self.sample_pos;
         ctx.continousTimeSamples = self.sample_pos;
-        ctx.projectTimeMusic = self.sample_pos as f64 / self.sample_rate * TEMPO / 60.0;
-        ctx.tempo = TEMPO;
+        // Accumulated, so the position stays continuous when the tempo changes.
+        ctx.projectTimeMusic = self.music_pos;
+        ctx.tempo = self.tempo;
         ctx.timeSigNumerator = 4;
         ctx.timeSigDenominator = 4;
 
@@ -186,6 +198,7 @@ impl Processor {
         self.events.events.get().clear();
         self.in_params.clear();
         self.sample_pos += n as i64;
+        self.music_pos += n as f64 / self.sample_rate * self.tempo / 60.0;
 
         match self.outputs.first() {
             Some(bus) if bus.channels.len() >= 2 => {

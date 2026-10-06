@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod arp;
 mod audio;
 mod config;
 mod controller;
@@ -10,6 +11,7 @@ mod keyboard;
 mod piano;
 mod preset;
 mod scan;
+mod tempo;
 mod theme;
 mod vst3host;
 
@@ -104,8 +106,8 @@ fn probe(bundle: &str) {
         .unwrap_or(10);
     for block in 0..note_at + 200 {
         match block {
-            n if n == note_at => proc.note_on(60, 0.9),
-            n if n == note_at + 90 => proc.note_off(60),
+            n if n == note_at => proc.note_on_at(0, 60, 0.9),
+            n if n == note_at + 90 => proc.note_off_at(0, 60),
             _ => {}
         }
         pump_messages();
@@ -124,7 +126,7 @@ fn probe(bundle: &str) {
             Some(p) => {
                 let mut brightness = |value: f64| {
                     proc.set_param(p.id, value);
-                    proc.note_on(60, 0.9);
+                    proc.note_on_at(0, 60, 0.9);
                     let (mut diff, mut level) = (0.0f64, 0.0f64);
                     for block in 0..100 {
                         pump_messages();
@@ -136,7 +138,7 @@ fn probe(bundle: &str) {
                             }
                         }
                     }
-                    proc.note_off(60);
+                    proc.note_off_at(0, 60);
                     for _ in 0..100 {
                         proc.process(&mut l, &mut r);
                     }

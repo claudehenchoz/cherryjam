@@ -16,6 +16,8 @@ pub struct Config {
     pub show_all_plugins: bool,
     /// Bundles found to be effects when loaded; hidden from the instrument list.
     pub known_effects: Vec<PathBuf>,
+    /// Last used tempo (BPM).
+    pub tempo: f32,
 }
 
 impl Default for Config {
@@ -27,6 +29,7 @@ impl Default for Config {
             velocity: 0.8,
             show_all_plugins: false,
             known_effects: Vec::new(),
+            tempo: crate::tempo::DEFAULT_BPM,
         }
     }
 }

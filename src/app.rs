@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 use egui::{Color32, RichText, Sense, Vec2};
 use parking_lot::Mutex;
 
+use crate::arp::{ARP_STEP, ArpSettings, Mode};
 use crate::audio::{self, AudioOut, Msg, MsgSender, ProcessorSlot};
 use crate::config::Config;
 use crate::controller::{AxisMap, Mapping, XyState, caps_lock_on};
@@ -15,6 +16,7 @@ use crate::keyboard::KeyboardState;
 use crate::piano::Piano;
 use crate::preset::{self, Preset};
 use crate::scan::{self, PluginEntry};
+use crate::tempo::{self, Division, TapTempo};
 use crate::theme;
 use crate::vst3host::editor::{self, Editor, PxRect};
 use crate::vst3host::module::{tuid_from_hex, tuid_to_hex};
@@ -25,6 +27,7 @@ enum Tab {
     Instruments,
     Presets,
     Effects,
+    Arp,
     Controller,
     Settings,
 }
@@ -46,7 +49,7 @@ struct Loaded {
 
 enum Pending {
     Entry(PluginEntry),
-    Preset(Preset),
+    Preset(Box<Preset>),
 }
 
 pub struct App {
@@ -67,6 +70,10 @@ pub struct App {
     pending: Option<(Pending, u8)>,
 
     fx: FxSettings,
+    arp: ArpSettings,
+    /// Global tempo (BPM): arpeggiator, synced effects, host tempo for plugins.
+    tempo: f32,
+    tap: TapTempo,
     mapping: Mapping,
     xy: XyState,
     learning: Option<Axis>,
@@ -103,6 +110,7 @@ impl App {
         };
         // Without audio there is still a UI; notes go nowhere.
         let sender = sender.unwrap_or_else(audio::null_sender);
+        sender.send(Msg::Tempo(config.tempo));
         let mut kb = KeyboardState::new(sender.clone());
         kb.velocity = config.velocity;
         let keyboard = Arc::new(Mutex::new(kb));
@@ -120,7 +128,9 @@ impl App {
                 .extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("json"))
             {
-                preset::load_file(&path).ok().map(Pending::Preset)
+                preset::load_file(&path)
+                    .ok()
+                    .map(|p| Pending::Preset(Box::new(p)))
             } else {
                 let binary = scan::binary_path(&path)?;
                 let name = path.file_stem()?.to_string_lossy().into_owned();
@@ -139,7 +149,7 @@ impl App {
                     .last_preset
                     .as_deref()
                     .and_then(|n| preset::load(n).ok())
-                    .map(Pending::Preset)
+                    .map(|p| Pending::Preset(Box::new(p)))
             })
             .map(|p| (p, 0));
 
@@ -157,6 +167,9 @@ impl App {
             dpi: cc.egui_ctx.pixels_per_point(),
             pending,
             fx: FxSettings::default(),
+            arp: ArpSettings::default(),
+            tempo: config.tempo,
+            tap: TapTempo::default(),
             mapping: Mapping::default(),
             xy: XyState::default(),
             learning: None,
@@ -273,6 +286,9 @@ impl App {
         self.mapping = p.mapping.clone();
         self.fx = p.fx;
         self.sender().send(Msg::Fx(self.fx));
+        self.arp = p.arp;
+        self.sender().send(Msg::Arp(self.arp));
+        self.set_tempo(p.tempo);
         match self.load_entry(&entry, Some(&p)) {
             Ok(()) => {
                 self.status = format!("Loaded preset \"{}\"", p.name);
@@ -302,6 +318,8 @@ impl App {
             class_id: tuid_to_hex(&l.plugin.cid),
             mapping: self.mapping.clone(),
             fx: self.fx,
+            arp: self.arp,
+            tempo: self.tempo,
             ..Default::default()
         };
         let (comp, ctl) = l.plugin.get_state();
@@ -349,7 +367,7 @@ impl App {
                     Err(err) => self.status = format!("Could not load {name}: {err}"),
                 }
             }
-            Pending::Preset(p) => self.apply_preset(p),
+            Pending::Preset(p) => self.apply_preset(*p),
         }
     }
 
@@ -543,6 +561,28 @@ impl App {
                         toggle_fullscreen(ui.ctx());
                     }
                     ui.separator();
+                    let arp_on = self.arp.enabled;
+                    let arp_btn =
+                        egui::Button::new(RichText::new("ARP").strong().color(if arp_on {
+                            Color32::WHITE
+                        } else {
+                            Color32::GRAY
+                        }))
+                        .fill(if arp_on {
+                            theme::ACCENT
+                        } else {
+                            ui.visuals().widgets.inactive.weak_bg_fill
+                        });
+                    if ui
+                        .add(arp_btn)
+                        .on_hover_text("Arpeggiator on/off (settings in the Arp tab)")
+                        .clicked()
+                    {
+                        self.arp.enabled = !arp_on;
+                        self.sender().send(Msg::Arp(self.arp));
+                    }
+                    self.tempo_controls(ui);
+                    ui.separator();
                     let (text, col) = if self.xy.engaged {
                         ("XY ACTIVE", theme::ACCENT)
                     } else {
@@ -610,7 +650,7 @@ impl App {
             )
             .show(root, |ui| {
                 let mut kb = self.keyboard.lock();
-                self.piano.ui(ui, &mut kb, 114.0);
+                self.piano.ui(ui, &mut kb, 114.0, self.arp.enabled);
             });
     }
 
@@ -629,6 +669,7 @@ impl App {
                         (Tab::Instruments, "Instruments"),
                         (Tab::Presets, "Presets"),
                         (Tab::Effects, "Effects"),
+                        (Tab::Arp, "Arp"),
                         (Tab::Controller, "XY"),
                         (Tab::Settings, "Settings"),
                     ] {
@@ -640,6 +681,7 @@ impl App {
                     Tab::Instruments => self.instruments_tab(ui),
                     Tab::Presets => self.presets_tab(ui),
                     Tab::Effects => self.effects_tab(ui),
+                    Tab::Arp => self.arp_tab(ui),
                     Tab::Controller => self.controller_tab(ui),
                     Tab::Settings => self.settings_tab(ui),
                 }
@@ -742,7 +784,7 @@ impl App {
             match preset::load(&n) {
                 Ok(p) => {
                     self.status = format!("Loading preset \"{n}\"…");
-                    self.pending = Some((Pending::Preset(p), 0));
+                    self.pending = Some((Pending::Preset(Box::new(p)), 0));
                 }
                 Err(e) => self.status = format!("Could not read preset: {e}"),
             }
@@ -761,18 +803,37 @@ impl App {
 
     fn effects_tab(&mut self, ui: &mut egui::Ui) {
         let before = self.fx;
+        let bpm = self.tempo;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
                 let d = &mut self.fx.delay;
                 section(ui, "Delay", &mut d.enabled, |ui| {
                     egui::Grid::new("delay").num_columns(2).show(ui, |ui| {
+                        ui.label("Sync");
+                        ui.checkbox(&mut d.sync, format!("to tempo ({bpm:.0} BPM)"));
+                        ui.end_row();
                         ui.label("Time");
-                        ui.add(
-                            egui::Slider::new(&mut d.time_ms, 10.0..=2000.0)
-                                .suffix(" ms")
-                                .logarithmic(true),
-                        );
+                        if d.sync {
+                            ui.vertical(|ui| {
+                                division_picker(ui, &mut d.division, tempo::DELAY_DIVISIONS);
+                                ui.label(
+                                    RichText::new(format!(
+                                        "= {:.0} ms",
+                                        (d.division.seconds(bpm) * 1000.0)
+                                            .min(crate::fx::delay::MAX_SECONDS as f64 * 1000.0)
+                                    ))
+                                    .small()
+                                    .weak(),
+                                );
+                            });
+                        } else {
+                            ui.add(
+                                egui::Slider::new(&mut d.time_ms, 10.0..=2000.0)
+                                    .suffix(" ms")
+                                    .logarithmic(true),
+                            );
+                        }
                         ui.end_row();
                         ui.label("Feedback");
                         ui.add(egui::Slider::new(&mut d.feedback, 0.0..=0.95));
@@ -806,7 +867,30 @@ impl App {
                         ui.add(egui::Slider::new(&mut r.width, 0.0..=1.0));
                         ui.end_row();
                         ui.label("Pre-delay");
-                        ui.add(egui::Slider::new(&mut r.predelay_ms, 0.0..=200.0).suffix(" ms"));
+                        ui.vertical(|ui| {
+                            ui.checkbox(&mut r.predelay_sync, "Sync to tempo");
+                            if r.predelay_sync {
+                                division_picker(
+                                    ui,
+                                    &mut r.predelay_division,
+                                    tempo::PREDELAY_DIVISIONS,
+                                );
+                                ui.label(
+                                    RichText::new(format!(
+                                        "= {:.0} ms",
+                                        (r.predelay_division.seconds(bpm) * 1000.0)
+                                            .min(crate::fx::reverb::MAX_PREDELAY_MS as f64)
+                                    ))
+                                    .small()
+                                    .weak(),
+                                );
+                            } else {
+                                ui.add(
+                                    egui::Slider::new(&mut r.predelay_ms, 0.0..=200.0)
+                                        .suffix(" ms"),
+                                );
+                            }
+                        });
                         ui.end_row();
                         ui.label("Mix");
                         ui.add(egui::Slider::new(&mut r.mix, 0.0..=1.0));
@@ -827,6 +911,184 @@ impl App {
             });
         if self.fx != before {
             self.sender().send(Msg::Fx(self.fx));
+        }
+    }
+
+    fn set_tempo(&mut self, bpm: f32) {
+        self.tempo = bpm.clamp(tempo::MIN_BPM, tempo::MAX_BPM);
+        self.config.tempo = self.tempo;
+        self.sender().send(Msg::Tempo(self.tempo));
+    }
+
+    /// BPM field + tap button. Laid out by the caller's layout (also used right-to-left).
+    fn tempo_controls(&mut self, ui: &mut egui::Ui) {
+        let mut bpm = self.tempo;
+        let rtl = ui.layout().prefer_right_to_left();
+        let tap = |ui: &mut egui::Ui| {
+            ui.button("Tap")
+                .on_hover_text("Tap a few times in time to set the tempo")
+        };
+        let field = |ui: &mut egui::Ui, bpm: &mut f32| {
+            ui.add(
+                egui::DragValue::new(bpm)
+                    .range(tempo::MIN_BPM..=tempo::MAX_BPM)
+                    .speed(0.25)
+                    .fixed_decimals(0)
+                    .suffix(" BPM"),
+            )
+            .on_hover_text("Tempo for the arpeggiator, synced effects and the plugin")
+        };
+        let (tapped, changed) = if rtl {
+            let t = tap(ui).clicked();
+            (t, field(ui, &mut bpm).changed())
+        } else {
+            let c = field(ui, &mut bpm).changed();
+            (tap(ui).clicked(), c)
+        };
+        if changed {
+            self.set_tempo(bpm);
+        }
+        if tapped && let Some(b) = self.tap.tap(ui.input(|i| i.time)) {
+            self.set_tempo(b);
+        }
+    }
+
+    fn arp_tab(&mut self, ui: &mut egui::Ui) {
+        let before = self.arp;
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let on = self.arp.enabled;
+                    let text = RichText::new(if on { "■  ARP ON" } else { "▶  ARP OFF" })
+                        .strong()
+                        .size(15.0);
+                    let btn = egui::Button::new(text)
+                        .min_size(Vec2::new(130.0, 32.0))
+                        .fill(if on {
+                            theme::ACCENT
+                        } else {
+                            ui.visuals().widgets.inactive.weak_bg_fill
+                        });
+                    if ui.add(btn).clicked() {
+                        self.arp.enabled = !on;
+                    }
+                    ui.add(
+                        egui::Button::selectable(self.arp.latch, "🔒 Latch")
+                            .min_size(Vec2::new(0.0, 32.0)),
+                    )
+                    .on_hover_text("Keep arpeggiating after you let go; the next chord replaces it")
+                    .clicked()
+                    .then(|| self.arp.latch = !self.arp.latch);
+                });
+                ui.label(
+                    RichText::new("Hold a chord and it gets played as a pattern, in time.")
+                        .small()
+                        .weak(),
+                );
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Tempo");
+                    self.tempo_controls(ui);
+                });
+                ui.add_space(6.0);
+
+                let a = &mut self.arp;
+                group(ui, "Rhythm", |ui| {
+                    ui.label("Rate");
+                    division_picker(ui, &mut a.rate, tempo::ARP_RATES);
+                    egui::Grid::new("arp-rhythm").num_columns(2).show(ui, |ui| {
+                        ui.label("Gate");
+                        let mut gate = a.gate * 100.0;
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut gate, 5.0..=100.0)
+                                    .suffix(" %")
+                                    .fixed_decimals(0),
+                            )
+                            .on_hover_text("Note length; 100 % = legato")
+                            .changed()
+                        {
+                            a.gate = gate / 100.0;
+                        }
+                        ui.end_row();
+                        ui.label("Swing");
+                        let mut swing = 50.0 + a.swing * 50.0;
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut swing, 50.0..=75.0)
+                                    .suffix(" %")
+                                    .fixed_decimals(0),
+                            )
+                            .on_hover_text("50 % = straight, 66 % = triplet feel")
+                            .changed()
+                        {
+                            a.swing = (swing - 50.0) / 50.0;
+                        }
+                        ui.end_row();
+                    });
+                });
+                ui.add_space(6.0);
+                group(ui, "Notes", |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for m in Mode::ALL {
+                            ui.selectable_value(&mut a.mode, m, m.label());
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Octaves");
+                        for o in 1..=4u8 {
+                            ui.selectable_value(&mut a.octaves, o, o.to_string());
+                        }
+                    });
+                    ui.checkbox(&mut a.retrigger, "Restart pattern on each new chord");
+                });
+                ui.add_space(6.0);
+                group(ui, "Pattern", |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Steps");
+                        ui.add(egui::DragValue::new(&mut a.steps).range(1..=16));
+                        ui.separator();
+                        if ui
+                            .small_button("All")
+                            .on_hover_text("Every step plays")
+                            .clicked()
+                        {
+                            a.pattern = u16::MAX;
+                        }
+                        if ui
+                            .small_button("1 · 3 · 5")
+                            .on_hover_text("Every other step")
+                            .clicked()
+                        {
+                            a.pattern = 0x5555;
+                        }
+                        if ui
+                            .small_button("🎲")
+                            .on_hover_text("Random pattern")
+                            .clicked()
+                        {
+                            let seed = (ui.input(|i| i.time) * 1e6) as u64;
+                            let x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 32;
+                            // Keep step 1 so the pattern starts on the beat.
+                            a.pattern = (x as u16) | 1;
+                        }
+                    });
+                    let playing = if a.enabled {
+                        ARP_STEP.load(std::sync::atomic::Ordering::Relaxed)
+                    } else {
+                        -1
+                    };
+                    pattern_grid(ui, a, playing);
+                    ui.label(
+                        RichText::new("Click steps to turn them into rests.")
+                            .small()
+                            .weak(),
+                    );
+                });
+            });
+        if self.arp != before {
+            self.sender().send(Msg::Arp(self.arp));
         }
     }
 
@@ -1247,6 +1509,66 @@ fn idx_of(axis: Axis) -> u8 {
     }
 }
 
+fn group(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(RichText::new(title).strong().size(15.0));
+        body(ui);
+    });
+}
+
+fn division_picker(ui: &mut egui::Ui, value: &mut Division, choices: &[Division]) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for &d in choices {
+            ui.selectable_value(value, d, d.label());
+        }
+    });
+}
+
+/// 16 clickable step cells in two rows; steps beyond the pattern length are dimmed.
+fn pattern_grid(ui: &mut egui::Ui, a: &mut ArpSettings, playing: i32) {
+    let gap = 4.0;
+    let w = ((ui.available_width() - gap * 7.0) / 8.0).clamp(14.0, 40.0);
+    for row in 0..2 {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for col in 0..8 {
+                let i = row * 8 + col;
+                let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, w * 0.8), Sense::click());
+                let in_range = i < a.steps as usize;
+                let on = a.step_on(i);
+                if resp.clicked() {
+                    a.pattern ^= 1 << i;
+                }
+                let fill = match (in_range, on) {
+                    (true, true) => theme::ACCENT_DIM,
+                    (true, false) => ui.visuals().extreme_bg_color,
+                    (false, _) => ui.visuals().faint_bg_color,
+                };
+                let p = ui.painter();
+                p.rect_filled(rect, 4.0, fill);
+                if i as i32 == playing {
+                    p.rect_stroke(rect, 4.0, (2.0, Color32::WHITE), egui::StrokeKind::Inside);
+                } else if resp.hovered() {
+                    p.rect_stroke(rect, 4.0, (1.0, theme::ACCENT), egui::StrokeKind::Inside);
+                }
+                p.text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    (i + 1).to_string(),
+                    egui::FontId::proportional(10.0),
+                    if in_range {
+                        Color32::from_gray(200)
+                    } else {
+                        Color32::from_gray(80)
+                    },
+                );
+            }
+        });
+    }
+}
+
 fn section(ui: &mut egui::Ui, title: &str, enabled: &mut bool, body: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -1292,6 +1614,8 @@ impl eframe::App for App {
         // Caps Lock is polled, and Linux plugin editors need their run loop pumped.
         let ms = if cfg!(target_os = "linux") && self.loaded.is_some() {
             16
+        } else if self.arp.enabled {
+            30
         } else {
             40
         };

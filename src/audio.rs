@@ -5,15 +5,27 @@ use std::sync::Arc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use parking_lot::Mutex;
 
+use crate::arp::{Arp, ArpSettings, NoteEvent};
 use crate::fx::{FxSettings, delay::Delay, reverb::Reverb, soft_limit};
 use crate::vst3host::processor::{MAX_BLOCK, Processor};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Msg {
-    NoteOn { pitch: u8, velocity: f32 },
-    NoteOff { pitch: u8 },
-    Param { id: u32, value: f64 },
+    NoteOn {
+        pitch: u8,
+        velocity: f32,
+    },
+    NoteOff {
+        pitch: u8,
+    },
+    Param {
+        id: u32,
+        value: f64,
+    },
     Fx(FxSettings),
+    Arp(ArpSettings),
+    /// Global tempo in BPM (arpeggiator, synced effects, host tempo for plugins).
+    Tempo(f32),
 }
 
 /// Cloneable handle for sending messages to the audio thread.
@@ -54,6 +66,9 @@ struct Renderer {
     fx: FxSettings,
     delay: Delay,
     reverb: Reverb,
+    arp: Arp,
+    bpm: f32,
+    sample_rate: f64,
     left: Vec<f32>,
     right: Vec<f32>,
 }
@@ -74,10 +89,13 @@ impl Renderer {
                     }
                     self.fx = fx;
                 }
-                (Msg::NoteOn { pitch, velocity }, Some(p)) => p.note_on(pitch, velocity),
-                (Msg::NoteOff { pitch }, Some(p)) => p.note_off(pitch),
+                // Notes always go through the arpeggiator (it passes them on when disabled).
+                (Msg::NoteOn { pitch, velocity }, _) => self.arp.note_on(pitch, velocity),
+                (Msg::NoteOff { pitch }, _) => self.arp.note_off(pitch),
+                (Msg::Arp(s), _) => self.arp.set_settings(s),
+                (Msg::Tempo(bpm), _) => self.bpm = bpm,
                 (Msg::Param { id, value }, Some(p)) => p.set_param(id, value),
-                _ => {}
+                (Msg::Param { .. }, None) => {}
             }
         }
 
@@ -85,18 +103,37 @@ impl Renderer {
         while done < frames {
             let n = (frames - done).min(MAX_BLOCK);
             let (l, r) = (&mut self.left[..n], &mut self.right[..n]);
-            match slot.as_mut().and_then(|s| s.as_mut()) {
-                Some(p) => p.process(l, r),
+            let mut proc = slot.as_mut().and_then(|s| s.as_mut());
+            self.arp
+                .process(n, self.sample_rate, self.bpm, |offset, e| {
+                    if let Some(p) = proc.as_mut() {
+                        match e {
+                            NoteEvent::On { pitch, velocity } => {
+                                p.note_on_at(offset, pitch, velocity)
+                            }
+                            NoteEvent::Off { pitch } => p.note_off_at(offset, pitch),
+                        }
+                    }
+                });
+            match proc {
+                Some(p) => {
+                    p.set_tempo(self.bpm);
+                    p.process(l, r);
+                }
                 None => {
                     l.fill(0.0);
                     r.fill(0.0);
                 }
             }
             if self.fx.delay.enabled {
-                self.delay.process(&self.fx.delay, l, r);
+                let mut d = self.fx.delay;
+                d.time_ms = d.effective_time_ms(self.bpm);
+                self.delay.process(&d, l, r);
             }
             if self.fx.reverb.enabled {
-                self.reverb.process(&self.fx.reverb, l, r);
+                let mut rv = self.fx.reverb;
+                rv.predelay_ms = rv.effective_predelay_ms(self.bpm);
+                self.reverb.process(&rv, l, r);
             }
             let g = self.fx.gain;
             for i in 0..n {
@@ -140,6 +177,9 @@ pub fn start(slot: ProcessorSlot) -> Result<(AudioOut, MsgSender), String> {
         fx: FxSettings::default(),
         delay: Delay::new(sample_rate as f32),
         reverb: Reverb::new(sample_rate as f32),
+        arp: Arp::default(),
+        bpm: crate::tempo::DEFAULT_BPM,
+        sample_rate,
         left: vec![0.0; MAX_BLOCK],
         right: vec![0.0; MAX_BLOCK],
     };

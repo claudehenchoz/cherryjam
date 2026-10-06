@@ -6,7 +6,7 @@ const COMB_TUNING: [usize; 8] = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617]
 const ALLPASS_TUNING: [usize; 4] = [556, 441, 341, 225];
 const STEREO_SPREAD: usize = 23;
 const FIXED_GAIN: f32 = 0.015;
-const MAX_PREDELAY_MS: f32 = 200.0;
+pub const MAX_PREDELAY_MS: f32 = 200.0;
 
 struct Comb {
     buf: Vec<f32>,

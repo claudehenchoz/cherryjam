@@ -1,4 +1,5 @@
-//! Presets: instrument + its state + controller mapping + effects, stored as JSON.
+//! Presets: instrument + its state + controller mapping + effects + arpeggiator and tempo,
+//! stored as JSON.
 
 use std::path::{Path, PathBuf};
 
@@ -6,10 +7,11 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
 
+use crate::arp::ArpSettings;
 use crate::controller::Mapping;
 use crate::fx::FxSettings;
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preset {
     pub name: String,
@@ -22,6 +24,26 @@ pub struct Preset {
     pub controller_state: String,
     pub mapping: Mapping,
     pub fx: FxSettings,
+    pub arp: ArpSettings,
+    /// Global tempo in BPM.
+    pub tempo: f32,
+}
+
+impl Default for Preset {
+    fn default() -> Self {
+        Preset {
+            name: String::new(),
+            plugin_name: String::new(),
+            plugin_path: PathBuf::new(),
+            class_id: String::new(),
+            component_state: String::new(),
+            controller_state: String::new(),
+            mapping: Mapping::default(),
+            fx: FxSettings::default(),
+            arp: ArpSettings::default(),
+            tempo: crate::tempo::DEFAULT_BPM,
+        }
+    }
 }
 
 impl Preset {
@@ -107,6 +129,12 @@ mod tests {
         p.set_state(&[1, 2, 3, 0, 255], &[]);
         p.mapping.x.param_id = Some(42);
         p.fx.delay.enabled = true;
+        p.fx.delay.sync = true;
+        p.fx.delay.division = crate::tempo::Division::QuarterTriplet;
+        p.arp.enabled = true;
+        p.arp.mode = crate::arp::Mode::UpDown;
+        p.arp.pattern = 0b1011;
+        p.tempo = 97.0;
         let s = serde_json::to_string(&p).unwrap();
         let q: Preset = serde_json::from_str(&s).unwrap();
         assert_eq!(p, q);
@@ -118,6 +146,15 @@ mod tests {
         let q: Preset = serde_json::from_str(r#"{"name":"x"}"#).unwrap();
         assert_eq!(q.fx.gain, 1.0);
         assert_eq!(q.mapping.sensitivity, Mapping::default().sensitivity);
+        // Presets from before 0.3: arp off, default tempo, effects not synced.
+        assert!(!q.arp.enabled);
+        assert_eq!(q.tempo, crate::tempo::DEFAULT_BPM);
+        assert!(!q.fx.delay.sync);
+        let old: Preset =
+            serde_json::from_str(r#"{"name":"x","fx":{"delay":{"enabled":true,"time_ms":250.0}}}"#)
+                .unwrap();
+        assert_eq!(old.fx.delay.time_ms, 250.0);
+        assert!(!old.fx.delay.sync);
     }
 
     #[test]

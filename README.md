@@ -69,17 +69,38 @@ Map any two plugin parameters to the mouse's X and Y axes, say filter cutoff on 
 * **Sensitivity** control for big, dramatic sweeps or fine, subtle moves.
 * A live **XY pad** shows where you are.
 
+### Arpeggiator: hold a chord, get a groove
+
+Hit **ARP** in the top bar, hold down a chord, and CherryJam turns it into a rhythmic pattern, locked to the tempo. That's it: instant 80s sequencer lines, trance gates and rolling synth-pop basslines without playing a single fast note.
+
+When you want more, the *Arp* tab has the controls:
+
+* **Rate:** 1/4, 1/8, 1/8T, 1/16, 1/16T, 1/32.
+* **Mode:** Up, Down, Up ↕ Down, Down ↕ Up, As played, Random, or **Chord** (the whole chord re-struck on every step).
+* **Octaves:** spread the pattern over 1 to 4 octaves.
+* **Gate:** short staccato blips up to fully legato (100 %).
+* **Swing:** from straight (50 %) to a deep shuffle (75 %).
+* **Latch:** let go of the keys and the arp keeps running; play a new chord to swap it.
+* **Step pattern:** up to 16 steps; click any step to turn it into a rest and get syncopated, stuttering rhythms. Quick buttons for *all steps*, *every other step* and a 🎲 random pattern.
+* **Restart on new chord:** the pattern starts from step 1 with every new chord, or keeps flowing if you turn it off.
+
+On the on-screen piano, the keys you hold glow dark red and the note the arp is playing right now lights up bright, so you can watch the pattern run.
+
+### One tempo for everything
+
+The **BPM** field in the top bar (drag it, type a value, or hit **Tap** in time a few times) sets the tempo for the arpeggiator, the synced effects *and* the instrument itself. Plugins with tempo-synced LFOs, arps or delays lock to CherryJam's tempo too.
+
 ### Built-in effects: delay & reverb
 
 Two simple, musical effects sit after the instrument:
 
-* **Delay:** time (10 ms – 2 s), feedback, tone (a low-pass in the feedback loop for warm, darkening repeats), mix and **ping-pong** for stereo bounce.
-* **Reverb:** size, damping, width, pre-delay and mix, from a tight room to a huge wash.
+* **Delay:** time (10 ms – 2 s), feedback, tone (a low-pass in the feedback loop for warm, darkening repeats), mix and **ping-pong** for stereo bounce. Turn on **Sync** and pick a note value instead (1/4, dotted 1/8, 1/8 triplet …), and the echoes land on the beat at any tempo.
+* **Reverb:** size, damping, width, pre-delay and mix, from a tight room to a huge wash. The pre-delay can **sync** to the tempo too (1/64 to 1/16), for a reverb that breathes with the groove.
 * **Master** volume, followed by a soft limiter so things never clip harshly.
 
 ### Presets: one click back to your sound
 
-A preset captures the **whole setup**: which instrument, its complete sound (the plugin's full internal state, not just the patch name), your XY mapping and your effect settings. Load it and everything snaps back exactly as it was. CherryJam reopens your last preset automatically on startup.
+A preset captures the **whole setup**: which instrument, its complete sound (the plugin's full internal state, not just the patch name), your XY mapping, your effect settings, the arpeggiator and the tempo. Load it and everything snaps back exactly as it was. CherryJam reopens your last preset automatically on startup.
 
 Presets are plain JSON files in `%APPDATA%\cherryjam\presets` (Windows) or `~/.config/cherryjam/presets` (Linux), so they're easy to back up or share.
 
