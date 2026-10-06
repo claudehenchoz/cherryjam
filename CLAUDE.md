@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-CherryJam is a minimal VST3 instrument host in Rust (egui/eframe with the glow renderer, cpal audio). You load an instrument and play it from the computer keyboard. It has an on-screen piano, an XY mouse controller (engaged by Caps Lock), built-in delay/reverb, and JSON presets. It targets Windows and Linux (X11/XWayland). Simplicity of use is the core product goal (see README).
+CherryJam is a minimal VST3 instrument host in Rust (egui/eframe, cpal audio; the UI renders with wgpu/Direct3D 12 on Windows and glow/OpenGL on Linux). You load an instrument and play it from the computer keyboard. It has an on-screen piano, an XY mouse controller (engaged by Caps Lock), built-in delay/reverb, and JSON presets. It targets Windows and Linux (X11/XWayland). Simplicity of use is the core product goal (see README).
 
 ## Commands
 
 ```sh
 cargo build                       # debug build
-cargo build --release             # release (LTO, stripped, panic=abort) → ~6 MB
+cargo build --release             # release (LTO, stripped, panic=abort) → ~9 MB on Windows
 cargo test                        # unit tests (keymap, presets, fx, scan, controller)
 cargo test keyboard::tests::note_refcount   # single test
 cargo clippy                      # keep this warning-free on both platforms
@@ -60,8 +60,9 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`. It builds on windows-la
   - It is clipped to its area so it never covers the piano or side panel.
   - Oversized editors make the app grow its window once (`Editor::overflow`).
   - Scaling uses `checkSizeConstraint` + `onSize` for resizable editors, or `IPlugViewContentScaleSupport`.
-  - On Windows the parent gets `WS_CLIPCHILDREN`. Use the glow renderer, not wgpu, because DXGI flip-model swapchains overdraw child windows.
-  - Plugin editors often render with their own OpenGL context on our UI thread and leave it current. eframe doesn't notice, and the whole egui UI goes black. `gl_guard.rs` captures eframe's context (WGL; GLX or EGL on Linux) in `App::new` and restores it at the end of every `App::ui`, right before eframe paints.
+  - On Windows the parent gets `WS_CLIPCHILDREN`.
+  - **Renderer on Windows: wgpu (Direct3D 12 only; see `main.rs` and the `wgpu` dependency in `Cargo.toml`), not glow.** Plugin editors render with OpenGL on our UI thread. Some plugins, e.g. TENANT RS-92, leave the NVIDIA OpenGL driver in a state where, after any other GL plugin, our own GL window surface is no longer composited at all: the UI turns transparent even though the GL state and current context are correct. With D3D12 the UI is immune, and child-window editors still show on top. Don't switch Windows back to glow.
+  - On Linux, eframe still uses glow. Plugins there can leave their own GL context current, so `gl_guard.rs` captures eframe's context (GLX or EGL; the WGL path is unused now) in `App::new` and restores it at the end of every `App::ui`, before eframe paints.
 
 **Keyboard input (`keyboard.rs`)** is matched by *physical* key position (`KEYMAP`: offsets from `base_note`). The piano labels show the user's actual layout (from the Win32 keyboard layout, or the X11 keysyms on Linux). `KeyboardState` refcounts notes so the mouse and keys don't cut each other off. Key events reach it on three paths, depending on platform and focus:
 - **Windows, egui focused:** egui `Event::Key` in `App::handle_keys`.
@@ -81,4 +82,4 @@ F11 fullscreen requests from the hook or poller go through `keyboard::FULLSCREEN
 
 ## Testing notes
 
-There is no automated GUI test. GUI behaviour was verified on Windows by launching the app with a plugin argument, sending input via `keybd_event`/`mouse_event` from PowerShell, and screenshotting the window. Linux GUI behaviour can only be tested by the user. Running the app writes to `%APPDATA%\cherryjam`; clean that up after manual tests.
+There is no automated GUI test. GUI behaviour was verified on Windows by launching the app with a plugin argument, sending input via `keybd_event`/`mouse_event` from PowerShell, and screenshotting the window. Linux GUI behaviour can only be tested by the user. Running the app writes to `%APPDATA%\cherryjam`, which also holds the user's **real** settings and presets on this machine. Back it up before manual tests and restore it afterwards; never delete it. Force-killing the app (`Stop-Process`) skips the config save on exit.

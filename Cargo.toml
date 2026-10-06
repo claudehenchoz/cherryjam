@@ -1,10 +1,10 @@
 [package]
 name = "cherryjam"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 
 [dependencies]
-eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+eframe = { version = "0.36", default-features = false, features = ["glow", "wgpu_no_default_features", "default_fonts", "x11", "wayland"] }
 egui = "0.36"
 vst3 = "0.3"
 cpal = "0.18"
@@ -21,7 +21,9 @@ parking_lot = "0.12"
 winresource = "0.1"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Gdi", "Win32_Graphics_OpenGL", "Win32_System_LibraryLoader", "Win32_System_Com", "Win32_System_Threading"] }
+# The UI renders with Direct3D 12 on Windows (see main.rs); no other wgpu backends are needed.
+wgpu = { version = "30", default-features = false, features = ["dx12", "wgsl", "std", "parking_lot"] }
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Gdi", "Win32_Graphics_OpenGL", "Win32_System_LibraryLoader", "Win32_System_Com", "Win32_System_Threading", "Win32_UI_Shell"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = "0.13"

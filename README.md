@@ -27,7 +27,7 @@ Plenty of apps can host a VST. Some cost a small fortune; the free ones usually 
 
 * **Zero setup.** It finds your plugins in the usual folders automatically. You just need a VST3 instrument.
 * **Plays from the keys you already have.** No MIDI controller needed.
-* **Tiny and fast.** Written in Rust, about a 6 MB executable, low-latency audio.
+* **Tiny and fast.** Written in Rust, about a 9 MB executable, low-latency audio.
 * **Looks the part.** A clean, dark, cherry-red interface that gets out of the way of the instrument.
 
 ---
@@ -128,7 +128,7 @@ Grab the latest build from the [Releases](../../releases) page:
 ### Build
 
 ```sh
-cargo build --release        # → target/release/cherryjam(.exe), ~6 MB
+cargo build --release        # → target/release/cherryjam(.exe), ~9 MB
 ```
 
 On Linux you'll need the ALSA development headers (`libasound2-dev` / `alsa-lib-devel`) and an X server or XWayland.

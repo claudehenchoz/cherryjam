@@ -43,6 +43,9 @@ fn main() -> eframe::Result<()> {
                 eframe::icon_data::from_png_bytes(include_bytes!("../icons/png/cherryjam-256.png"))
                     .unwrap_or_default(),
             ),
+        // Windows: Direct3D via wgpu, so plugins' OpenGL activity can't interfere with our window.
+        #[cfg(windows)]
+        renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
     let open = args
